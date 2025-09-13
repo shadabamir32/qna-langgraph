@@ -9,19 +9,51 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import InjectedToolCallId, tool
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
+    name: str
+    birthday: str
 
 load_dotenv()
 graph_builder = StateGraph(State)
 
 @tool
-def human_assistance(query: str) -> str:
+# Note that because we are generating a ToolMessage for a state update, we
+# generally require the ID of the corresponding tool call. We can use
+# LangChain's InjectedToolCallId to signal that this argument should not
+# be revealed to the model in the tool's schema.
+def human_assistance(name: str, birthday: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
     """Request assistance from a human."""
-    human_response = interrupt({"query": query})
-    return human_response["data"]
+    human_response = interrupt(
+        {
+            "question": "Is this correct?",
+            "name": name,
+            "birthday": birthday,
+        },
+    )
+    # If the information is correct, update the state as-is.
+    if human_response.get("correct", "").lower().startswith("y"):
+        verified_name = name
+        verified_birthday = birthday
+        response = "Correct"
+    # Otherwise, receive information from the human reviewer.
+    else:
+        verified_name = human_response.get("name", name)
+        verified_birthday = human_response.get("birthday", birthday)
+        response = f"Made a correction: {human_response}"
 
+    # This time we explicitly update the state with a ToolMessage inside
+    # the tool.
+    state_update = {
+        "name": verified_name,
+        "birthday": verified_birthday,
+        "messages": [ToolMessage(response, tool_call_id=tool_call_id)],
+    }
+    # We return a Command object in the tool to update our state.
+    return Command(update=state_update)
 
 tool = TavilySearch(max_results=2)
 # tool.invoke("What's a 'node' in LangGraph?")
@@ -66,18 +98,27 @@ def stream_graph_updates(user_input: str):
     if "tools" in snapshot.next:
         resume_graph_after_human_assistance()
 def resume_graph_after_human_assistance():
-    human_response = (
-        "We, the experts are here to help! We'd recommend you check out LangGraph to build your agent."
-        " It's much more reliable and extensible than simple autonomous agents."
+    human_command = Command(
+        resume={
+            "name": "LangGraph",
+            "birthday": "Jan 17, 2024",
+        },
     )
-
-    human_command = Command(resume={"data": human_response})
 
     events = graph.stream(human_command, config, stream_mode="values")
     for event in events:
         if "messages" in event:
             event["messages"][-1].pretty_print()
+
+def update_graph_state_manually():
+    graph.update_state(config, {"name": "LangGraph (library)"})
+
 while True:
+    # Example user input that requires human assistance
+    # user_input = (
+    #     "Can you look up when LangGraph was released? "
+    #     "When you have the answer, use the human_assistance tool for review."
+    # )
     user_input = input("User: ")
     if user_input.lower() in ["quit", "exit", "q"]:
         print("Goodbye!")
