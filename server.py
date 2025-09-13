@@ -19,6 +19,7 @@ class State(TypedDict):
 
 load_dotenv()
 graph_builder = StateGraph(State)
+tto_replay = None
 
 @tool
 # Note that because we are generating a ToolMessage for a state update, we
@@ -113,6 +114,20 @@ def resume_graph_after_human_assistance():
 def update_graph_state_manually():
     graph.update_state(config, {"name": "LangGraph (library)"})
 
+def get_graph_state():
+    for state in graph.get_state_history(config):
+        print("Num Messages: ", len(state.values["messages"]), "Next: ", state.next)
+        print("-" * 80)
+        if len(state.values["messages"]) == 6:
+            # We are somewhat arbitrarily selecting a specific state based on the number of chat messages in the state.
+            to_replay = state
+    if to_replay is not None:
+        for event in graph.stream(None, to_replay.config, stream_mode="values"):
+            if "messages" in event:
+                event["messages"][-1].pretty_print()
+    else:
+        print("No suitable state found for replay.")
+
 while True:
     # Example user input that requires human assistance
     # user_input = (
@@ -123,4 +138,7 @@ while True:
     if user_input.lower() in ["quit", "exit", "q"]:
         print("Goodbye!")
         break
+    elif user_input.lower() in ["tto"]:
+        get_graph_state()
+        continue
     stream_graph_updates(user_input)
