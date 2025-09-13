@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_tavily import TavilySearch
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.checkpoint.memory import InMemorySaver
 
 class State(TypedDict):
     # Messages have the type "list". The `add_messages` function
@@ -42,8 +43,11 @@ graph_builder.add_conditional_edges("chatbot",tools_condition)
 # Any time a tool is called, we return to the chatbot to decide the next step
 graph_builder.add_edge("tools", "chatbot")
 graph_builder.add_edge(START, "chatbot")
-graph = graph_builder.compile()
 
+memory = InMemorySaver()
+
+graph = graph_builder.compile(checkpointer=memory)
+config = {"configurable": {"thread_id": "1"}}
 # from IPython.display import Image, display
 
 # try:
@@ -53,21 +57,18 @@ graph = graph_builder.compile()
 #     pass
 
 def stream_graph_updates(user_input: str):
-    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
-        for value in event.values():
-            print("Assistant:", value["messages"][-1].content)
+    events = graph.stream(
+        {"messages": [{"role": "user", "content": user_input}]},
+        config,
+        stream_mode="values"
+    )
+    for event in events:
+        event["messages"][-1].pretty_print()
 
 
 while True:
-    try:
-        user_input = input("User: ")
-        if user_input.lower() in ["quit", "exit", "q"]:
-            print("Goodbye!")
-            break
-        stream_graph_updates(user_input)
-    except:
-        # fallback if input() is not available
-        user_input = "What do you know about LangGraph?"
-        print("User: " + user_input)
-        stream_graph_updates(user_input)
+    user_input = input("User: ")
+    if user_input.lower() in ["quit", "exit", "q"]:
+        print("Goodbye!")
         break
+    stream_graph_updates(user_input)
